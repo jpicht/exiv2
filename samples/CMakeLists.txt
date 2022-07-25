@@ -53,38 +53,49 @@ endif()
 
 add_executable( getopt-test getopt-test.cpp ../app/getopt.cpp)
 list(APPEND APPLICATIONS getopt-test)
-target_include_directories(getopt-test PRIVATE 
+target_include_directories(getopt-test PRIVATE
   ${CMAKE_SOURCE_DIR}/app
 ) # To find getopt.hpp
 
 add_executable( metacopy metacopy.cpp metacopy.hpp ../app/getopt.cpp)
 list(APPEND APPLICATIONS metacopy)
-target_include_directories(metacopy PRIVATE 
+target_include_directories(metacopy PRIVATE
   ${CMAKE_SOURCE_DIR}/app
 ) # To find getopt.hpp
 
 add_executable(          path-test  path-test.cpp ../app/getopt.cpp)
 list(APPEND APPLICATIONS path-test)
 set_target_properties(   path-test  PROPERTIES OUTPUT_NAME path-test )
-target_include_directories(path-test PRIVATE 
+target_include_directories(path-test PRIVATE
   ${CMAKE_SOURCE_DIR}/app
 ) # To find getopt.hpp
 
-add_executable(          exiv2json exiv2json.cpp Jzon.cpp Jzon.h)
-list(APPEND APPLICATIONS exiv2json)
+include(FetchContent)
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.10.5
+    GIT_SHALLOW TRUE
+)
+
+FetchContent_MakeAvailable(json)
+
+add_executable(            exiv2json exiv2json.cpp)
+target_include_directories(exiv2json SYSTEM PUBLIC "${json_SOURCE_DIR}/include/")
+list(APPEND APPLICATIONS   exiv2json)
 
 install( TARGETS metacopy exiv2json RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 if( EXPAT_FOUND )
     add_executable(        geotag    geotag.cpp)
     list(APPEND APPLICATIONS geotag)
-    target_link_libraries(geotag 
+    target_link_libraries(geotag
         PRIVATE
             exiv2-xmp
             ${EXPAT_LIBRARIES}
     )
-    target_include_directories(geotag PRIVATE ${CMAKE_BINARY_DIR})          # exv_conf.h 
-    target_include_directories(geotag PRIVATE ${CMAKE_SOURCE_DIR}/include)  # <exiv2/exiv2.hpp>    
+    target_include_directories(geotag PRIVATE ${CMAKE_BINARY_DIR})          # exv_conf.h
+    target_include_directories(geotag PRIVATE ${CMAKE_SOURCE_DIR}/include)  # <exiv2/exiv2.hpp>
     target_include_directories(geotag PRIVATE ${EXPAT_INCLUDE_DIR})
     target_include_directories(geotag PRIVATE ${CMAKE_SOURCE_DIR}/src) # To find unused.h
 

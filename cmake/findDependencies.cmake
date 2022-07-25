@@ -80,4 +80,3 @@ if( BUILD_WITH_CCACHE )
         set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK ccache)
     endif()
 endif()
-

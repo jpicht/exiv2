@@ -9,7 +9,7 @@
 #include <filesystem>
 #include <iostream>
 
-#include "Jzon.h"
+#include <nlohmann/json.hpp>
 
 #if defined(__MINGW32__) || defined(__MINGW64__)
 #ifndef __MINGW__
@@ -55,35 +55,33 @@ bool getToken(std::string& in, Token& token, std::set<std::string>* pNS = nullpt
   return result;
 }
 
-Jzon::Node& addToTree(Jzon::Node& r1, const Token& token) {
-  Jzon::Object object;
-  Jzon::Array array;
+nlohmann::json& addToTree(nlohmann::json& r1, const Token& token) {
+  nlohmann::json object;
+  nlohmann::json array;
 
   std::string key = token.n;
   size_t index = token.i - 1;  // array Eg: "History[1]" indexed from 1.  Jzon expects 0 based index.
-  auto& empty = token.a ? static_cast<Jzon::Node&>(array) : static_cast<Jzon::Node&>(object);
+  auto& empty = token.a ? static_cast<nlohmann::json&>(array) : static_cast<nlohmann::json&>(object);
 
-  if (r1.IsObject()) {
-    Jzon::Object& o1 = r1.AsObject();
-    if (!o1.Has(key))
-      o1.Add(key, empty);
-    return o1.Get(key);
+  if (r1.is_object()) {
+    if (!r1.contains(key))
+      r1[key] = empty;
+    return r1[key];
   }
-  if (r1.IsArray()) {
-    Jzon::Array& a1 = r1.AsArray();
-    while (a1.GetCount() <= index)
-      a1.Add(empty);
-    return a1.Get(index);
+  if (r1.is_array()) {
+    while (r1.size() <= index)
+      r1.push_back(empty);
+    return r1[index];
   }
   return r1;
 }
 
-Jzon::Node& recursivelyBuildTree(Jzon::Node& root, Tokens& tokens, size_t k) {
+nlohmann::json& recursivelyBuildTree(nlohmann::json& root, Tokens& tokens, size_t k) {
   return addToTree(k == 0 ? root : recursivelyBuildTree(root, tokens, k - 1), tokens.at(k));
 }
 
 // build the json tree for this key.  return location and discover the name
-Jzon::Node& objectForKey(const std::string& Key, Jzon::Object& root, std::string& name,
+nlohmann::json& objectForKey(const std::string& Key, nlohmann::json& root, std::string& name,
                          std::set<std::string>* pNS = nullptr) {
   // Parse the key
   Tokens tokens;
@@ -120,14 +118,8 @@ bool isArray(std::string& value) {
   return value == "type=\"Seq\"" || value == "type=\"Bag\"" || value == "type=\"Alt\"";
 }
 
-#define STORE(node, key, value)      \
-  if (node.IsObject())               \
-    node.AsObject().Add(key, value); \
-  else                               \
-    node.AsArray().Add(value)
-
 template <class T>
-void push(Jzon::Node& node, const std::string& key, T i) {
+void push(nlohmann::json& node, const std::string& key, T i) {
 #define ABORT_IF_I_EMPTY        \
   if (i->value().size() == 0) { \
     return;                     \
@@ -138,13 +130,11 @@ void push(Jzon::Node& node, const std::string& key, T i) {
   switch (i->typeId()) {
     case Exiv2::xmpText:
       if (::isObject(value)) {
-        Jzon::Object v;
-        STORE(node, key, v);
+        node[key] = nlohmann::json::object();
       } else if (::isArray(value)) {
-        Jzon::Array v;
-        STORE(node, key, v);
+        node[key] = nlohmann::json::array();
       } else {
-        STORE(node, key, value);
+        node[key] = value;
       }
       break;
 
@@ -154,34 +144,29 @@ void push(Jzon::Node& node, const std::string& key, T i) {
     case Exiv2::signedByte:
     case Exiv2::signedShort:
     case Exiv2::signedLong:
-      STORE(node, key, std::atoi(value.c_str()));
+      node[key] = std::atoi(value.c_str());
       break;
 
     case Exiv2::tiffFloat:
     case Exiv2::tiffDouble:
-      STORE(node, key, std::atof(value.c_str()));
+      node[key] = std::atof(value.c_str());
       break;
 
     case Exiv2::unsignedRational:
     case Exiv2::signedRational: {
       ABORT_IF_I_EMPTY
-      Jzon::Array arr;
       Exiv2::Rational rat = i->value().toRational();
-      arr.Add(rat.first);
-      arr.Add(rat.second);
-      STORE(node, key, arr);
+      node[key] = nlohmann::json::array({rat.first, rat.second});
     } break;
 
     case Exiv2::langAlt: {
       ABORT_IF_I_EMPTY
-      Jzon::Object l;
+      nlohmann::json l;
       const auto& langs = dynamic_cast<const Exiv2::LangAltValue&>(i->value());
       for (auto&& lang : langs.value_) {
-        l.Add(lang.first, lang.second);
+        l[lang.first] = lang.second;
       }
-      Jzon::Object o;
-      o.Add("lang", l);
-      STORE(node, key, o);
+      node[key] = nlohmann::json::object({{"lang", l}});
     } break;
 
     default:
@@ -204,30 +189,30 @@ void push(Jzon::Node& node, const std::string& key, T i) {
       }
       if (key == "MakerNote")
         return;
-      STORE(node, key, value);
+      node[key] = value;
       break;
   }
 }
 
-void fileSystemPush(const char* path, Jzon::Node& nfs) {
-  auto& fs = dynamic_cast<Jzon::Object&>(nfs);
-  fs.Add("path", path);
-  fs.Add("realpath", std::filesystem::absolute(std::filesystem::path(path)).string());
+void fileSystemPush(const char* path, nlohmann::json& nfs) {
+  auto& fs = dynamic_cast<nlohmann::json&>(nfs);
+  fs["path"] = path;
+  fs["realpath"] = std::filesystem::absolute(std::filesystem::path(path)).string();
 
   struct stat buf = {};
   stat(path, &buf);
 
-  fs.Add("st_dev", static_cast<int>(buf.st_dev));     /* ID of device containing file    */
-  fs.Add("st_ino", static_cast<int>(buf.st_ino));     /* inode number                    */
-  fs.Add("st_mode", static_cast<int>(buf.st_mode));   /* protection                      */
-  fs.Add("st_nlink", static_cast<int>(buf.st_nlink)); /* number of hard links            */
-  fs.Add("st_uid", static_cast<int>(buf.st_uid));     /* user ID of owner                */
-  fs.Add("st_gid", static_cast<int>(buf.st_gid));     /* group ID of owner               */
-  fs.Add("st_rdev", static_cast<int>(buf.st_rdev));   /* device ID (if special file)     */
-  fs.Add("st_size", static_cast<int>(buf.st_size));   /* total size, in bytes            */
-  fs.Add("st_atime", static_cast<int>(buf.st_atime)); /* time of last access             */
-  fs.Add("st_mtime", static_cast<int>(buf.st_mtime)); /* time of last modification       */
-  fs.Add("st_ctime", static_cast<int>(buf.st_ctime)); /* time of last status change      */
+  fs["st_dev"] = static_cast<int>(buf.st_dev);     /* ID of device containing file    */
+  fs["st_ino"] = static_cast<int>(buf.st_ino);     /* inode number                    */
+  fs["st_mode"] = static_cast<int>(buf.st_mode);   /* protection                      */
+  fs["st_nlink"] = static_cast<int>(buf.st_nlink); /* number of hard links            */
+  fs["st_uid"] = static_cast<int>(buf.st_uid);     /* user ID of owner                */
+  fs["st_gid"] = static_cast<int>(buf.st_gid);     /* group ID of owner               */
+  fs["st_rdev"] = static_cast<int>(buf.st_rdev);   /* device ID (if special file)     */
+  fs["st_size"] = static_cast<int>(buf.st_size);   /* total size, in bytes            */
+  fs["st_atime"] = static_cast<int>(buf.st_atime); /* time of last access             */
+  fs["st_mtime"] = static_cast<int>(buf.st_mtime); /* time of last modification       */
+  fs["st_ctime"] = static_cast<int>(buf.st_ctime); /* time of last status change      */
 
 #if defined(_MSC_VER) || defined(__MINGW__)
   size_t blksize = 1024;
@@ -236,8 +221,8 @@ void fileSystemPush(const char* path, Jzon::Node& nfs) {
   size_t blksize = buf.st_blksize;
   size_t blocks = buf.st_blocks;
 #endif
-  fs.Add("st_blksize", static_cast<int>(blksize)); /* blocksize for file system I/O   */
-  fs.Add("st_blocks", static_cast<int>(blocks));   /* number of 512B blocks allocated */
+  fs["st_blksize"] = static_cast<int>(blksize); /* blocksize for file system I/O   */
+  fs["st_blocks"] = static_cast<int>(blocks);   /* number of 512B blocks allocated */
 }
 
 int main(int argc, char* const argv[]) {
@@ -262,20 +247,20 @@ int main(int argc, char* const argv[]) {
     Exiv2::Image::UniquePtr image = Exiv2::ImageFactory::open(path);
     image->readMetadata();
 
-    Jzon::Object root;
+    nlohmann::json root;
 
     if (option == 'f') {  // only report filesystem when requested
       const char* Fs = "FS";
-      Jzon::Object fs;
-      root.Add(Fs, fs);
-      fileSystemPush(path, root.Get(Fs));
+      nlohmann::json fs;
+      root[Fs] = fs;
+      fileSystemPush(path, root[Fs]);
     }
 
     if (option == 'a' || option == 'e') {
       Exiv2::ExifData& exifData = image->exifData();
       for (auto i = exifData.begin(); i != exifData.end(); ++i) {
         std::string name;
-        Jzon::Node& object = objectForKey(i->key(), root, name);
+        nlohmann::json& object = objectForKey(i->key(), root, name);
         push(object, name, i);
       }
     }
@@ -284,7 +269,7 @@ int main(int argc, char* const argv[]) {
       Exiv2::IptcData& iptcData = image->iptcData();
       for (auto i = iptcData.begin(); i != iptcData.end(); ++i) {
         std::string name;
-        Jzon::Node& object = objectForKey(i->key(), root, name);
+        nlohmann::json& object = objectForKey(i->key(), root, name);
         push(object, name, i);
       }
     }
@@ -297,7 +282,7 @@ int main(int argc, char* const argv[]) {
         std::set<std::string> namespaces;
         for (auto i = xmpData.begin(); i != xmpData.end(); ++i) {
           std::string name;
-          Jzon::Node& object = objectForKey(i->key(), root, name, &namespaces);
+          nlohmann::json& object = objectForKey(i->key(), root, name, &namespaces);
           push(object, name, i);
         }
 
@@ -305,21 +290,19 @@ int main(int argc, char* const argv[]) {
         Exiv2::Dictionary nsDict;
         Exiv2::XmpProperties::registeredNamespaces(nsDict);
 
-        // create and populate a Jzon::Object for the namespaces
-        Jzon::Object xmlns;
+        // create and populate a nlohmann::json for the namespaces
+        nlohmann::json xmlns;
         for (auto&& ns : namespaces) {
-          xmlns.Add(ns, nsDict[ns]);
+          xmlns[ns] = nsDict[ns];
         }
 
         // add xmlns as Xmp.xmlns
-        root.Get("Xmp").AsObject().Add("xmlns", xmlns);
+        root["Xmp"]["xmlns"] = xmlns;
       }
     }
 #endif
 
-    Jzon::Writer writer(root, Jzon::StandardFormat);
-    writer.Write();
-    std::cout << writer.GetResult() << std::endl;
+    std::cout << root.dump(1, '\t') << std::endl;
     return EXIT_SUCCESS;
   }
 
